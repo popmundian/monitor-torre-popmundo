@@ -149,9 +149,10 @@ def try_server(server: str):
             resp.raise_for_status()
             final_page = detect_page(BeautifulSoup(resp.text, "html.parser"), resp.url)
             print(f"   Resultado: {final_page}")
-            if final_page not in ("char_main", "already_logged"):
-                print("   ⚠️ Não confirmado. Pulando...")
+            if final_page in ("login", "char_select"):
+                print("   ⚠️ Ainda na tela de login/seleção. Pulando...")
                 return None
+            # Qualquer outra página (char_main, already_logged, unknown) = sucesso
 
         else:
             print(f"   ⚠️ Página inesperada: {page}. Pulando...")
