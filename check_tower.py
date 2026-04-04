@@ -124,7 +124,9 @@ def try_server(server: str) -> str | None:
         form   = soup.find("form")
         action = form.get("action", char_select_url)
         if not action.startswith("http"):
-            action = base_url + "/" + action.lstrip("/")
+            action = base_url + "/World/Popmundo.aspx/" + action.split("/")[-1]
+        else:
+            action = char_select_url
 
         payload = {
             **extract_hidden_fields(soup),
