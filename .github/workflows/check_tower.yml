@@ -2,10 +2,7 @@ name: 🔥 Torre Infernal - Monitor
 
 on:
   schedule:
-    # Roda a cada 15 minutos, 24h/dia, 7 dias/semana
     - cron: "0,15,30,45 * * * *"
-
-  # Permite disparar manualmente pelo painel do GitHub (útil pra testar)
   workflow_dispatch:
 
 jobs:
@@ -27,9 +24,9 @@ jobs:
 
       - name: 🔍 Verificar Torre Infernal
         env:
-          POPMUNDO_SERVER:  ${{ secrets.POPMUNDO_SERVER }}
-          POPMUNDO_USER:    ${{ secrets.POPMUNDO_USER }}
-          POPMUNDO_PASS:    ${{ secrets.POPMUNDO_PASS }}
-          TELEGRAM_TOKEN:   ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          POPMUNDO_USER:     ${{ secrets.POPMUNDO_USER }}
+          POPMUNDO_PASS:     ${{ secrets.POPMUNDO_PASS }}
+          POPMUNDO_CHARNAME: ${{ secrets.POPMUNDO_CHARNAME }}
+          TELEGRAM_TOKEN:    ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID:  ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python check_tower.py
