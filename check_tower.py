@@ -3,16 +3,14 @@ import requests
 from bs4 import BeautifulSoup
 
 # ─── Configurações (lidas dos GitHub Secrets) ──────────────────────────────────
-POPMUNDO_SERVER   = os.environ["POPMUNDO_SERVER"]   # ex: "73" → 73.popmundo.com
 POPMUNDO_USER     = os.environ["POPMUNDO_USER"]
 POPMUNDO_PASS     = os.environ["POPMUNDO_PASS"]
-POPMUNDO_CHARNAME = os.environ["POPMUNDO_CHARNAME"]  # nome do seu personagem
+POPMUNDO_CHARNAME = os.environ["POPMUNDO_CHARNAME"]
 TELEGRAM_TOKEN    = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHAT_ID  = os.environ["TELEGRAM_CHAT_ID"]
 
-BASE_URL         = f"https://{POPMUNDO_SERVER}.popmundo.com"
-CHAR_SELECT_URL  = f"{BASE_URL}/World/Popmundo.aspx/ChooseCharacter"
-TOWER_URL        = f"{BASE_URL}/World/Popmundo.aspx/City/ToweringInferno"
+# Tenta os 3 servidores possíveis automaticamente
+SERVERS = ["73", "74", "75"]
 
 FIRE_MARKER = "alerta da Torre Infernal"
 
@@ -39,7 +37,6 @@ def send_telegram(message: str) -> None:
 # ─── Helpers ASP.NET ──────────────────────────────────────────────────────────
 
 def extract_hidden_fields(soup: BeautifulSoup) -> dict:
-    """Extrai todos os campos hidden do formulário ASP.NET (ViewState etc.)."""
     fields = {}
     for tag in soup.find_all("input", {"type": "hidden"}):
         name = tag.get("name")
@@ -49,160 +46,141 @@ def extract_hidden_fields(soup: BeautifulSoup) -> dict:
 
 
 def detect_page(soup: BeautifulSoup, url: str) -> str:
-    """
-    Identifica em qual etapa do fluxo estamos.
-    Ordem de teste conforme documentação:
-      already_logged → char_main → char_select → login
-    """
     if soup.find("select", id=lambda x: x and x.endswith("ucCharacterBar_ddlCurrentCharacter")):
         return "already_logged"
-
     if "/Popmundo.aspx/Character" in url and "ChooseCharacter" not in url:
         return "char_main"
-
     if "ChooseCharacter" in url or soup.find("form", action=lambda x: x and "ChooseCharacter" in x):
         return "char_select"
-
     if soup.find(id="ctl00_cphRightColumn_ucLogin_txtUsername"):
         return "login"
-
     return "unknown"
 
 
-# ─── Etapa 1: Login ───────────────────────────────────────────────────────────
+# ─── Fluxo por servidor ───────────────────────────────────────────────────────
 
-def do_login(session: requests.Session) -> tuple:
+def try_server(server: str) -> str | None:
     """
-    Navega para ChooseCharacter → redirecionado ao login → faz o postback.
-    Retorna (soup, url_final).
+    Tenta logar e selecionar o personagem num servidor.
+    Retorna a URL base do servidor se encontrou o personagem, ou None se não encontrou.
     """
-    print("🌐 Acessando página de login...")
-    resp = session.get(CHAR_SELECT_URL, headers=HEADERS, timeout=15)
-    resp.raise_for_status()
-    soup = BeautifulSoup(resp.text, "html.parser")
+    base_url        = f"https://{server}.popmundo.com"
+    char_select_url = f"{base_url}/World/Popmundo.aspx/ChooseCharacter"
+    print(f"\n🌐 Tentando servidor {server}...")
 
-    page = detect_page(soup, resp.url)
-    print(f"   Página detectada: {page}")
+    with requests.Session() as session:
+        # ── Etapa 1: navegar → redireciona pro login ──
+        resp = session.get(char_select_url, headers=HEADERS, timeout=15)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        page = detect_page(soup, resp.url)
+        print(f"   Página inicial: {page}")
 
-    if page in ("already_logged", "char_main"):
-        print("   Sessão já ativa, pulando login.")
-        return soup, resp.url
+        # ── Etapa 2: login se necessário ──
+        if page == "login":
+            hidden   = extract_hidden_fields(soup)
+            login_url = resp.url
+            payload  = {
+                **hidden,
+                "ctl00$cphRightColumn$ucLogin$txtUsername": POPMUNDO_USER,
+                "ctl00$cphRightColumn$ucLogin$txtPassword": POPMUNDO_PASS,
+                "ctl00$cphRightColumn$ucLogin$ddlStatus":   "0",
+                "ctl00$cphRightColumn$ucLogin$btnLogin":    "Entrar",
+                "__EVENTTARGET":   "",
+                "__EVENTARGUMENT": "",
+            }
+            print("🔐 Fazendo login...")
+            resp = session.post(login_url, data=payload, headers={
+                **HEADERS,
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Referer": login_url,
+            }, timeout=15)
+            resp.raise_for_status()
+            soup = BeautifulSoup(resp.text, "html.parser")
+            page = detect_page(soup, resp.url)
+            print(f"   Página após login: {page}")
 
-    if page != "login":
-        raise RuntimeError(f"Página inesperada: {page} ({resp.url})")
+        if page in ("already_logged", "char_main"):
+            # Sessão já ativa, pula direto pra verificação da torre
+            print("   Sessão já ativa neste servidor!")
+            return base_url
 
-    hidden = extract_hidden_fields(soup)
-    login_url = resp.url
+        if page != "char_select":
+            print(f"   ⚠️ Página inesperada ({page}), pulando servidor.")
+            return None
 
-    payload = {
-        **hidden,
-        "ctl00$cphRightColumn$ucLogin$txtUsername": POPMUNDO_USER,
-        "ctl00$cphRightColumn$ucLogin$txtPassword": POPMUNDO_PASS,
-        "ctl00$cphRightColumn$ucLogin$ddlStatus": "0",
-        "ctl00$cphRightColumn$ucLogin$btnLogin": "Entrar",
-        "__EVENTTARGET": "",
-        "__EVENTARGUMENT": "",
-    }
-
-    print("🔐 Enviando credenciais...")
-    resp = session.post(login_url, data=payload, headers={
-        **HEADERS,
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Referer": login_url,
-    }, timeout=15)
-    resp.raise_for_status()
-    return BeautifulSoup(resp.text, "html.parser"), resp.url
-
-
-# ─── Etapa 2: Seleção de personagem ──────────────────────────────────────────
-
-def do_char_select(session: requests.Session, soup: BeautifulSoup, current_url: str) -> bool:
-    """
-    Na tela ChooseCharacter, encontra o botão do personagem e submete.
-    Retorna True se chegou na página principal do personagem.
-    """
-    page = detect_page(soup, current_url)
-
-    if page in ("already_logged", "char_main"):
-        print("✅ Personagem já selecionado.")
-        return True
-
-    if page != "char_select":
-        if soup.find(id="ctl00_cphRightColumn_ucLogin_txtUsername"):
-            raise RuntimeError("❌ Login falhou. Verifique usuário e senha.")
-        raise RuntimeError(f"Página inesperada na seleção: {page}")
-
-    print(f"🎭 Procurando personagem '{POPMUNDO_CHARNAME}'...")
-
-    buttons = soup.find_all("input", {"type": "submit"})
-    btn = next((b for b in buttons if POPMUNDO_CHARNAME.lower() in b.get("value", "").lower()), None)
-
-    if not btn:
-        char_names = [b.get("value", "") for b in buttons if b.get("value")]
-        raise RuntimeError(
-            f"Personagem '{POPMUNDO_CHARNAME}' não encontrado. "
-            f"Disponíveis: {char_names}"
+        # ── Etapa 3: selecionar personagem ──
+        print(f"🎭 Procurando personagem '{POPMUNDO_CHARNAME}'...")
+        buttons = soup.find_all("input", {"type": "submit"})
+        btn = next(
+            (b for b in buttons if POPMUNDO_CHARNAME.lower() in b.get("value", "").lower()),
+            None
         )
 
-    hidden = extract_hidden_fields(soup)
-    form = soup.find("form")
-    action = form.get("action", CHAR_SELECT_URL)
-    if not action.startswith("http"):
-        action = BASE_URL + "/" + action.lstrip("/")
+        if not btn:
+            print(f"   Personagem não encontrado neste servidor. Pulando...")
+            return None  # ← tenta o próximo servidor
 
-    payload = {
-        **hidden,
-        btn["name"]: btn["value"],
-        "__EVENTTARGET": "",
-        "__EVENTARGUMENT": "",
-    }
+        form   = soup.find("form")
+        action = form.get("action", char_select_url)
+        if not action.startswith("http"):
+            action = base_url + "/" + action.lstrip("/")
 
-    print(f"   Selecionando '{btn['value']}'...")
-    resp = session.post(action, data=payload, headers={
-        **HEADERS,
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Referer": CHAR_SELECT_URL,
-    }, timeout=15)
-    resp.raise_for_status()
+        payload = {
+            **extract_hidden_fields(soup),
+            btn["name"]: btn["value"],
+            "__EVENTTARGET":   "",
+            "__EVENTARGUMENT": "",
+        }
 
-    final_soup = BeautifulSoup(resp.text, "html.parser")
-    final_page = detect_page(final_soup, resp.url)
-    print(f"   Resultado: {final_page} ({resp.url})")
+        print(f"   Selecionando '{btn['value']}'...")
+        resp = session.post(action, data=payload, headers={
+            **HEADERS,
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Referer": char_select_url,
+        }, timeout=15)
+        resp.raise_for_status()
+        final_soup = BeautifulSoup(resp.text, "html.parser")
+        final_page = detect_page(final_soup, resp.url)
+        print(f"   Resultado: {final_page}")
 
-    return final_page in ("char_main", "already_logged")
+        if final_page not in ("char_main", "already_logged"):
+            print("   ⚠️ Não foi possível confirmar acesso ao personagem.")
+            return None
 
+        # ── Etapa 4: verificar a torre (dentro da mesma sessão!) ──
+        tower_url = f"{base_url}/World/Popmundo.aspx/City/ToweringInferno"
+        print(f"🔍 Verificando Torre Infernal no servidor {server}...")
+        resp = session.get(tower_url, headers=HEADERS, timeout=15)
+        resp.raise_for_status()
 
-# ─── Etapa 3: Verifica a Torre ────────────────────────────────────────────────
+        if FIRE_MARKER in resp.text:
+            print("🔥 TORRE INFERNAL ATIVA!")
+            send_telegram(
+                f"🔥 <b>TORRE INFERNAL EM CHAMAS!</b>\n\n"
+                f"Uma aventura está disponível agora no Popmundo!\n"
+                f"👉 <a href='{tower_url}'>Clique aqui para entrar</a>"
+            )
+        else:
+            print("🏰 Torre tranquila.")
 
-def check_tower(session: requests.Session) -> bool:
-    print("🔍 Verificando Torre Infernal...")
-    resp = session.get(TOWER_URL, headers=HEADERS, timeout=15)
-    resp.raise_for_status()
-    return FIRE_MARKER in resp.text
+        return base_url  # personagem encontrado, não precisa tentar outros servidores
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    with requests.Session() as session:
-        soup, url = do_login(session)
-        success = do_char_select(session, soup, url)
+    for server in SERVERS:
+        result = try_server(server)
+        if result is not None:
+            print(f"\n✅ Personagem encontrado e verificado no servidor {server}.")
+            return
 
-        if not success:
-            raise RuntimeError("Não foi possível confirmar o acesso ao personagem.")
-
-        print("✅ Autenticado com sucesso!")
-
-        if check_tower(session):
-            print("🔥 TORRE INFERNAL ATIVA!")
-            message = (
-                "🔥 <b>TORRE INFERNAL EM CHAMAS!</b>\n\n"
-                "Uma aventura está disponível agora no Popmundo!\n"
-                f"👉 <a href='{TOWER_URL}'>Clique aqui para entrar</a>"
-            )
-            send_telegram(message)
-        else:
-            print("🏰 Torre tranquila. Nenhuma ação necessária.")
+    # Se chegou aqui, não achou o personagem em nenhum servidor
+    raise RuntimeError(
+        f"❌ Personagem '{POPMUNDO_CHARNAME}' não encontrado em nenhum servidor "
+        f"({', '.join(SERVERS)}). Verifique o nome no Secret."
+    )
 
 
 if __name__ == "__main__":
