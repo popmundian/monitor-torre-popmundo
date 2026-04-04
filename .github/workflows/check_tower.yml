@@ -5,6 +5,9 @@ on:
     - cron: "0,15,30,45 * * * *"
   workflow_dispatch:
 
+permissions:
+  contents: write  # necessário para salvar o estado no repositório
+
 jobs:
   check-tower:
     runs-on: ubuntu-latest
@@ -30,3 +33,11 @@ jobs:
           TELEGRAM_TOKEN:    ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID:  ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python check_tower.py
+
+      - name: 💾 Salvar estado da torre
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add state.json
+          git diff --staged --quiet || git commit -m "chore: atualiza estado da torre"
+          git push
