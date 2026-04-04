@@ -1,11 +1,12 @@
 import os
+import re
 import json
 import requests
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from bs4 import BeautifulSoup
 
-# ─── Configurações ─────────────────────────────────────────────────────────────
+# ─── Configurações (lidas dos GitHub Secrets) ──────────────────────────────────
 POPMUNDO_USER     = os.environ["POPMUNDO_USER"]
 POPMUNDO_PASS     = os.environ["POPMUNDO_PASS"]
 POPMUNDO_CHARNAME = os.environ["POPMUNDO_CHARNAME"]
@@ -13,7 +14,7 @@ TELEGRAM_TOKEN    = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHAT_ID  = os.environ["TELEGRAM_CHAT_ID"]
 
 SERVERS     = ["73", "74", "75"]
-FIRE_MARKER = "alerta da Torre Infernal"
+FIRE_MARKER = "imgFire"
 STATE_FILE  = Path("state.json")
 BRT         = timezone(timedelta(hours=-3))  # Horário de Brasília
 
@@ -34,8 +35,8 @@ def load_state() -> dict:
         return json.loads(STATE_FILE.read_text(encoding="utf-8"))
     return {
         "active": False,
-        "started_at": None,      # ISO string BRT
-        "last_ended_at": None,   # ISO string BRT
+        "started_at": None,
+        "last_ended_at": None,
         "last_duration_min": None
     }
 
@@ -46,9 +47,7 @@ def now_brt() -> datetime:
     return datetime.now(BRT)
 
 def fmt(iso: str) -> str:
-    """Formata ISO string para exibição amigável."""
-    dt = datetime.fromisoformat(iso)
-    return dt.strftime("%d/%m às %H:%M")
+    return datetime.fromisoformat(iso).strftime("%d/%m às %H:%M")
 
 
 # ─── Telegram ─────────────────────────────────────────────────────────────────
@@ -80,10 +79,10 @@ def detect_page(soup: BeautifulSoup, url: str) -> str:
 
 # ─── Fluxo por servidor ───────────────────────────────────────────────────────
 
-def try_server(server: str) -> bool | None:
+def try_server(server: str):
     """
     Loga, seleciona personagem e verifica a torre num servidor.
-    Retorna True (torre ativa), False (torre inativa) ou None (personagem não encontrado).
+    Retorna (tower_active: bool, tower_html: str) ou None se personagem não encontrado.
     """
     base_url        = f"https://{server}.popmundo.com"
     char_select_url = f"{base_url}/World/Popmundo.aspx/ChooseCharacter"
@@ -121,6 +120,7 @@ def try_server(server: str) -> bool | None:
 
         if page in ("already_logged", "char_main"):
             print("   Sessão já ativa!")
+
         elif page == "char_select":
             # ── Etapa 3: selecionar personagem ──
             print(f"🎭 Procurando '{POPMUNDO_CHARNAME}'...")
@@ -152,6 +152,7 @@ def try_server(server: str) -> bool | None:
             if final_page not in ("char_main", "already_logged"):
                 print("   ⚠️ Não confirmado. Pulando...")
                 return None
+
         else:
             print(f"   ⚠️ Página inesperada: {page}. Pulando...")
             return None
@@ -162,12 +163,12 @@ def try_server(server: str) -> bool | None:
         resp.raise_for_status()
         active = FIRE_MARKER in resp.text
         print(f"   Torre {'🔥 ATIVA' if active else '🏰 inativa'}")
-        return active
+        return active, resp.text
 
 
 # ─── Lógica de estado e notificações ─────────────────────────────────────────
 
-def process_result(tower_active: bool, tower_url: str):
+def process_result(tower_active: bool, tower_html: str):
     state = load_state()
     now   = now_brt()
     now_s = now.isoformat()
@@ -179,14 +180,21 @@ def process_result(tower_active: bool, tower_url: str):
         state["active"]     = True
         state["started_at"] = now_s
 
+        # Hora de início extraída direto da página do jogo
+        game_start = ""
+        m = re.search(r'começou em.*?>(\d{2}/\d{2}/\d{4},\s*\d{2}:\d{2})<', tower_html)
+        if m:
+            game_start = f"\n🎮 Início no jogo: <b>{m.group(1)}</b>"
+
+        # Info da última torre
         ultimo = ""
         if state.get("last_ended_at") and state.get("last_duration_min") is not None:
-            ultimo = (f"\n\n🕐 Última torre: {fmt(state['last_ended_at'])} "
+            ultimo = (f"\n🕐 Última torre: {fmt(state['last_ended_at'])} "
                       f"({state['last_duration_min']} min de duração)")
 
         msg = (
             f"🔥 <b>TORRE INFERNAL EM CHAMAS!</b>\n\n"
-            f"⏰ Iniciou às <b>{now.strftime('%H:%M')}</b>{ultimo}\n\n"
+            f"⏰ Detectada às <b>{now.strftime('%H:%M')}</b>{game_start}{ultimo}\n\n"
             f"Corre lá no Popmundo!"
         )
         send_telegram(msg)
@@ -194,11 +202,11 @@ def process_result(tower_active: bool, tower_url: str):
 
     elif not tower_active and was_active:
         # ── Torre ACABOU DE APAGAR ──
-        started = datetime.fromisoformat(state["started_at"]) if state.get("started_at") else None
+        started      = datetime.fromisoformat(state["started_at"]) if state.get("started_at") else None
         duration_min = int((now - started).total_seconds() / 60) if started else "?"
 
-        state["active"]           = False
-        state["last_ended_at"]    = now_s
+        state["active"]            = False
+        state["last_ended_at"]     = now_s
         state["last_duration_min"] = duration_min
 
         inicio = f" (iniciou às {fmt(state['started_at'])})" if state.get("started_at") else ""
@@ -225,23 +233,20 @@ def process_result(tower_active: bool, tower_url: str):
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    tower_active = None
-    tower_url    = None
+    tower_result = None
 
     for server in SERVERS:
         result = try_server(server)
         if result is not None:
-            tower_active = result
-            tower_url    = f"https://{server}.popmundo.com/World/Popmundo.aspx/City/ToweringInferno"
+            tower_active, tower_html = result
             print(f"\n✅ Personagem encontrado no servidor {server}.")
-            break
+            process_result(tower_active, tower_html)
+            return
 
-    if tower_active is None:
-        raise RuntimeError(
-            f"❌ Personagem '{POPMUNDO_CHARNAME}' não encontrado em nenhum servidor."
-        )
-
-    process_result(tower_active, tower_url)
+    raise RuntimeError(
+        f"❌ Personagem '{POPMUNDO_CHARNAME}' não encontrado em nenhum servidor "
+        f"({', '.join(SERVERS)}). Verifique o nome no Secret."
+    )
 
 
 if __name__ == "__main__":
