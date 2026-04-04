@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write  # necessário para salvar o estado no repositório
+  contents: write
 
 jobs:
   check-tower:
