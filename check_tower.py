@@ -237,30 +237,20 @@ def process_result(tower_active, tower_html):
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    found_any         = False
-    tower_active_any  = False
-    tower_html_active = ""
-
     for server in SERVERS:
         result = try_server(server)
         if result is None:
             continue
-        found_any = True
         tower_active, tower_html = result
         print(f"✅ Personagem confirmado no servidor {server}.")
-        if tower_active:
-            tower_active_any  = True
-            tower_html_active = tower_html
-            print(f"🔥 Torre ATIVA no servidor {server}!")
+        process_result(tower_active, tower_html)
+        print("\n=== Verificação concluída ===")
+        return
 
-    if not found_any:
-        raise RuntimeError(
-            f"❌ Personagem '{POPMUNDO_CHARNAME}' não encontrado em nenhum servidor "
-            f"({', '.join(SERVERS)}). Verifique o nome no Secret POPMUNDO_CHARNAME."
-        )
-
-    process_result(tower_active_any, tower_html_active)
-    print("\n=== Verificação concluída ===")
+    raise RuntimeError(
+        f"❌ Personagem '{POPMUNDO_CHARNAME}' não encontrado em nenhum servidor "
+        f"({', '.join(SERVERS)}). Verifique o nome no Secret POPMUNDO_CHARNAME."
+    )
 
 
 if __name__ == "__main__":
