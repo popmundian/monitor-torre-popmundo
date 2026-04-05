@@ -32,7 +32,7 @@ jobs:
           POPMUNDO_CHARNAME: ${{ secrets.POPMUNDO_CHARNAME }}
           TELEGRAM_TOKEN:    ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID:  ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python check_tower.py
+        run: python -u check_tower.py
 
       - name: 💾 Salvar estado da torre
         run: |
