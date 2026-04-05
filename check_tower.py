@@ -162,9 +162,18 @@ def try_server(server: str):
         print("🔍 Verificando Torre Infernal...")
         resp = s.get(tower_url, headers=HEADERS, timeout=15)
         resp.raise_for_status()
-        active = FIRE_MARKER in resp.text
+        print(f"   URL final: {resp.url}")
+        html = resp.text
+        # Debug: mostra trecho do HTML para diagnóstico
+        idx = html.find("cphLeftColumn")
+        if idx >= 0:
+            print(f"   DEBUG: {html[idx:idx+400]}")
+        else:
+            print(f"   DEBUG (sem cphLeftColumn): {html[:400]}")
+        print(f"   'imgFire' encontrado: {'SIM 🔥' if 'imgFire' in html else 'NAO'}")
+        active = FIRE_MARKER in html
         print(f"   Torre {'🔥 ATIVA' if active else '🏰 inativa'}")
-        return active, resp.text
+        return active, html
 
 
 # ─── Lógica de estado e notificações ─────────────────────────────────────────
@@ -234,21 +243,28 @@ def process_result(tower_active: bool, tower_html: str):
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    tower_result = None
+    found_any = False
+    tower_active_any = False
+    tower_html_active = ""
 
     for server in SERVERS:
         result = try_server(server)
-        if result is not None:
-            tower_active, tower_html = result
-            print(f"\n✅ Personagem encontrado no servidor {server}.")
-            process_result(tower_active, tower_html)
-            return
+        if result is None:
+            continue
 
-    raise RuntimeError(
-        f"❌ Personagem '{POPMUNDO_CHARNAME}' não encontrado em nenhum servidor "
-        f"({', '.join(SERVERS)}). Verifique o nome no Secret."
-    )
+        found_any = True
+        tower_active, tower_html = result
+        print(f"✅ Personagem encontrado no servidor {server}.")
 
+        if tower_active:
+            tower_active_any = True
+            tower_html_active = tower_html
+            print(f"🔥 Torre ATIVA no servidor {server}!")
 
-if __name__ == "__main__":
-    main()
+    if not found_any:
+        raise RuntimeError(
+            f"❌ Personagem '{POPMUNDO_CHARNAME}' não encontrado em nenhum servidor "
+            f"({', '.join(SERVERS)}). Verifique o nome no Secret."
+        )
+
+    process_result(tower_active_any, tower_html_active)
