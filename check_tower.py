@@ -160,18 +160,13 @@ def try_server(server):
         resp = s.get(tower_url, headers=HEADERS, timeout=15)
         resp.raise_for_status()
         html = resp.text
+
+        # Detecta se a sessão foi perdida (redirecionou para logout/login)
+        if "logout=true" in resp.url or "Default.aspx" in resp.url:
+            print(f"   ⚠️ Sessão perdida após seleção (redirecionou para {resp.url}). Pulando...")
+            return None
+
         print(f"   URL final: {resp.url}")
-        print(f"   'imgFire' encontrado: {'SIM 🔥' if 'imgFire' in html else 'NAO 🏰'}")
-
-        # Debug: trecho relevante do HTML
-        idx = html.find("imgFire")
-        if idx >= 0:
-            print(f"   DEBUG imgFire: ...{html[idx:idx+100]}...")
-        else:
-            idx2 = html.find("cphLeftColumn")
-            snippet = html[idx2:idx2+300] if idx2 >= 0 else html[:300]
-            print(f"   DEBUG html: {snippet}")
-
         active = FIRE_MARKER in html
         print(f"   Torre: {'🔥 ATIVA' if active else '🏰 inativa'}")
         return active, html
