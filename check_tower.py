@@ -197,7 +197,6 @@ def process_result(tower_active, tower_html):
         msg = (
             f"🔥 <b>TORRE INFERNAL EM CHAMAS!</b>\n\n"
             f"⏰ Detectada às <b>{now.strftime('%H:%M')}</b>{game_start}{ultimo}\n\n"
-            f"Corre lá no Popmundo!"
         )
         send_telegram(msg)
         print("📨 Notificação de INÍCIO enviada.")
