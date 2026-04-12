@@ -46,6 +46,13 @@ def now_brt():
 def fmt(iso):
     return datetime.fromisoformat(iso).strftime("%d/%m às %H:%M")
 
+def fmt_duracao(minutos):
+    if not isinstance(minutos, int):
+        return "?"
+    h = minutos // 60
+    m = minutos % 60
+    return f"{h:02d}:{m:02d}"
+
 
 # ─── Telegram ─────────────────────────────────────────────────────────────────
 
@@ -192,18 +199,19 @@ def process_result(tower_active, tower_html):
         ultimo = ""
         if state.get("last_ended_at") and state.get("last_duration_min") is not None:
             ultimo = (f"\n🕐 Última torre: {fmt(state['last_ended_at'])} "
-                      f"({state['last_duration_min']} min de duração)")
+                      f"(duração: {fmt_duracao(state['last_duration_min'])})")
 
         msg = (
             f"🔥 <b>TORRE INFERNAL EM CHAMAS!</b>\n\n"
             f"⏰ Detectada às <b>{now.strftime('%H:%M')}</b>{game_start}{ultimo}\n\n"
+            f"Corre lá no Popmundo!"
         )
         send_telegram(msg)
         print("📨 Notificação de INÍCIO enviada.")
 
     elif not tower_active and was_active:
         started      = datetime.fromisoformat(state["started_at"]) if state.get("started_at") else None
-        duration_min = int((now - started).total_seconds() / 60) if started else "?"
+        duration_min = int((now - started).total_seconds() / 60) if started else None
         state["active"]            = False
         state["last_ended_at"]     = now_s
         state["last_duration_min"] = duration_min
@@ -211,7 +219,7 @@ def process_result(tower_active, tower_html):
         inicio = f" (iniciou às {fmt(state['started_at'])})" if state.get("started_at") else ""
         msg = (
             f"✅ <b>Torre Infernal apagada!</b>\n\n"
-            f"⏱ Durou <b>{duration_min} minutos</b>{inicio}\n"
+            f"⏱ Durou <b>{fmt_duracao(duration_min)}</b>{inicio}\n"
             f"🕐 Encerrou às <b>{now.strftime('%H:%M')}</b>"
         )
         send_telegram(msg)
@@ -220,7 +228,7 @@ def process_result(tower_active, tower_html):
     elif tower_active and was_active:
         started = datetime.fromisoformat(state["started_at"]) if state.get("started_at") else None
         elapsed = int((now - started).total_seconds() / 60) if started else "?"
-        print(f"🔥 Torre ainda ativa (há ~{elapsed} min). Sem nova notificação.")
+        print(f"🔥 Torre ainda ativa (há ~{fmt_duracao(elapsed) if isinstance(elapsed, int) else elapsed}). Sem nova notificação.")
 
     else:
         print("🏰 Torre continua inativa. Nenhuma ação.")
