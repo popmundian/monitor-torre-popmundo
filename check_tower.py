@@ -151,12 +151,22 @@ def try_server(server):
                 "Referer": char_select_url,
             }, timeout=15)
             resp.raise_for_status()
-            final_page = detect_page(BeautifulSoup(resp.text, "html.parser"), resp.url)
+            final_soup = BeautifulSoup(resp.text, "html.parser")
+            final_page = detect_page(final_soup, resp.url)
             print(f"   Resultado: {final_page}")
 
             if final_page in ("login", "char_select"):
                 print("   ⚠️ Ainda na tela de login/seleção. Pulando...")
                 return None
+
+            # Se resultado desconhecido, verifica sessão buscando página do personagem
+            if final_page == "unknown":
+                print("   🔎 Resultado desconhecido — verificando sessão...")
+                check = s.get(base_url + "/World/Popmundo.aspx/Character", headers=HEADERS, timeout=15)
+                if "logout=true" in check.url or "Default.aspx" in check.url or "Login" in check.url:
+                    print(f"   ⚠️ Sessão inválida confirmada ({check.url}). Pulando...")
+                    return None
+                print(f"   Sessão válida ({check.url})")
 
         else:
             print(f"   ⚠️ Página inesperada: {page}. Pulando...")
@@ -239,19 +249,27 @@ def process_result(tower_active, tower_html):
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    for server in SERVERS:
-        result = try_server(server)
-        if result is None:
-            continue
-        tower_active, tower_html = result
-        print(f"✅ Personagem confirmado no servidor {server}.")
-        process_result(tower_active, tower_html)
-        print("\n=== Verificação concluída ===")
-        return
+    MAX_TENTATIVAS = 3
+
+    for tentativa in range(1, MAX_TENTATIVAS + 1):
+        if tentativa > 1:
+            print(f"\n🔄 Retentativa {tentativa}/{MAX_TENTATIVAS}...")
+
+        for server in SERVERS:
+            result = try_server(server)
+            if result is None:
+                continue
+            tower_active, tower_html = result
+            print(f"✅ Personagem confirmado no servidor {server}.")
+            process_result(tower_active, tower_html)
+            print("\n=== Verificação concluída ===")
+            return  # sucesso — encerra
+
+        print(f"⚠️ Nenhum servidor respondeu na tentativa {tentativa}.")
 
     raise RuntimeError(
-        f"❌ Personagem '{POPMUNDO_CHARNAME}' não encontrado em nenhum servidor "
-        f"({', '.join(SERVERS)}). Verifique o nome no Secret POPMUNDO_CHARNAME."
+        f"❌ Personagem '{POPMUNDO_CHARNAME}' não encontrado após {MAX_TENTATIVAS} tentativas. "
+        f"Verifique o Secret POPMUNDO_CHARNAME ou tente novamente mais tarde."
     )
 
 
