@@ -1,6 +1,6 @@
 {
-  "active": true,
+  "active": false,
   "started_at": "2026-05-08T03:20:27.885863-03:00",
-  "last_ended_at": "2026-05-07T12:35:54.145587-03:00",
-  "last_duration_min": 144
+  "last_ended_at": "2026-05-08T08:05:57.154286-03:00",
+  "last_duration_min": 285
 }
