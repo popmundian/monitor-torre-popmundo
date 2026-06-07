@@ -16,6 +16,7 @@ TELEGRAM_CHAT_ID  = os.environ["TELEGRAM_CHAT_ID"]
 SERVERS     = ["73", "74", "75"]
 FIRE_MARKER = "imgFire"
 STATE_FILE  = Path("state.json")
+LOG_FILE    = Path("torre_log.json")
 BRT         = timezone(timedelta(hours=-3))
 
 HEADERS = {
@@ -52,6 +53,28 @@ def fmt_duracao(minutos):
     h = minutos // 60
     m = minutos % 60
     return f"{h:02d}:{m:02d}"
+
+
+# ─── Log de eventos ───────────────────────────────────────────────────────────
+
+def load_log():
+    if LOG_FILE.exists():
+        return json.loads(LOG_FILE.read_text(encoding="utf-8"))
+    return []
+
+def save_log(eventos):
+    LOG_FILE.write_text(json.dumps(eventos, ensure_ascii=False, indent=2), encoding="utf-8")
+
+def registrar_evento(tipo, detalhes: dict):
+    """Adiciona um evento ao log. tipo = 'ACENDEU' ou 'APAGOU'"""
+    eventos = load_log()
+    eventos.append({
+        "tipo": tipo,
+        "data_hora": now_brt().strftime("%d/%m/%Y %H:%M"),
+        **detalhes
+    })
+    save_log(eventos)
+    print(f"📋 Evento registrado no log: {tipo}")
 
 
 # ─── Telegram ─────────────────────────────────────────────────────────────────
@@ -91,14 +114,12 @@ def try_server(server):
     print(f"\n🌐 Tentando servidor {server}...")
 
     with requests.Session() as s:
-        # Etapa 1: navegar → redireciona pro login
         resp = s.get(char_select_url, headers=HEADERS, timeout=15)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
         page = detect_page(soup, resp.url)
         print(f"   Página inicial: {page}")
 
-        # Etapa 2: login
         if page == "login":
             login_url = resp.url
             payload = {
@@ -120,126 +141,133 @@ def try_server(server):
             page = detect_page(soup, resp.url)
             print(f"   Página após login: {page}")
 
-        # Etapa 3: selecionar personagem
         if page in ("already_logged", "char_main"):
             print("   Sessão já ativa!")
 
         elif page == "char_select":
-            imprimir(f" 🎭 Procurando '{NOME DO PERSONAGEM POPMUNDO}'...")
-            botões = sopa.encontrar_todos("entrada", {"tipo": "enviar"})
-            btn = próximo((b para b em botões
-                        se POPMUNDO_CHARNAME.inferior() em b.pegar("valor", "").inferior()), Nenhum)
+            print(f"   🎭 Procurando '{POPMUNDO_CHARNAME}'...")
+            buttons = soup.find_all("input", {"type": "submit"})
+            btn = next((b for b in buttons
+                        if POPMUNDO_CHARNAME.lower() in b.get("value", "").lower()), None)
 
-            se não btn:
-                imprimir(" Personagem não encontrado aqui. Pulando...")
-                retornar Nenhum
+            if not btn:
+                print("   Personagem não encontrado aqui. Pulando...")
+                return None
 
-            forma = sopa.encontrar("forma")
-            ação = forma.pegar("ação", "")
-            ação = char_select_url se Ação.começa com("http") outro \
-                     base_url + "/Mundo/Popmundo.aspx/" + ação.dividir("/")[-1]
+            form   = soup.find("form")
+            action = form.get("action", "")
+            action = char_select_url if action.startswith("http") else \
+                     base_url + "/World/Popmundo.aspx/" + action.split("/")[-1]
 
-            carga útil = {
-                **campos_ocultos(sopa),
-                btn["nome"]: btn["valor"],
+            payload = {
+                **hidden_fields(soup),
+                btn["name"]: btn["value"],
                 "__EVENTTARGET": "", "__EVENTARGUMENT": "",
             }
-            imprimir(f" Seleccionando '{btn['valor']}'...")
-            resp = s.postar(ação, dados=carga útil, cabeçalhos={
-                **CABEÇALHOS,
-                "Tipo de conteúdo": "aplicativo/x-www-form-urlencoded",
-                "Árbitro": char_select_url,
-            }, tempo limite=15)
-            resp.status_para_aumentar()
-            sopa_final = Linda sopa(resp.texto, "html.parser")
-            página_final = detectar_página(sopa_final, resp.url)
-            imprimir(f" Resultado: {página_final}")
+            print(f"   Selecionando '{btn['value']}'...")
+            resp = s.post(action, data=payload, headers={
+                **HEADERS,
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Referer": char_select_url,
+            }, timeout=15)
+            resp.raise_for_status()
+            final_soup = BeautifulSoup(resp.text, "html.parser")
+            final_page = detect_page(final_soup, resp.url)
+            print(f"   Resultado: {final_page}")
 
-            se página_final em ("login", "char_select"):
-                imprimir(" ⚠️ Ainda na tela de login/seleção. Pulando...")
-                retornar Nenhum
+            if final_page in ("login", "char_select"):
+                print("   ⚠️ Ainda na tela de login/seleção. Pulando...")
+                return None
 
-            # Se resultado decepcionado, verifica sessão buscando página do personagem
-            se página_final == "desconhecido":
-                imprimir(" 🔎 Resultado decepcionado — verificando sessão...")
-                verificar = s.Pégar(base_url + "/Mundo/Popmundo.aspx/Personagem", cabosalhos=CABEÇALHOS, tempo limite=15)
-                se "logout=verdadeiro" em verificar.url ou "Default.aspx" em verificar.url ou "Login" em verificar.url:
-                    imprimir(f" ⚠️ Sessão inválida confirmada ({verificar.url}). Pulando...")
-                    retornar Nenhum
-                imprimir(f" Sessão válida ({verificar.url})")
+            if final_page == "unknown":
+                print("   🔎 Verificando sessão...")
+                check = s.get(base_url + "/World/Popmundo.aspx/Character", headers=HEADERS, timeout=15)
+                if "logout=true" in check.url or "Default.aspx" in check.url or "Login" in check.url:
+                    print(f"   ⚠️ Sessão inválida ({check.url}). Pulando...")
+                    return None
+                print(f"   Sessão válida ({check.url})")
 
-        outro:
-            imprimir(f" ⚠️ Página inesperada: {página}. Pulando...")
-            retornar Nenhum
+        else:
+            print(f"   ⚠️ Página inesperada: {page}. Pulando...")
+            return None
 
-        # Etapa 4: verificar torre
-        imprimir(f" 🔍 Verificando torre em {torre_url}...")
-        resp = s.pegar(tower_url, cabosalhos=CABEÇALHOS, tempo limite=15)
-        resp.aumar_para_status()
-        html = resp.texto
+        print(f"   🔍 Verificando torre...")
+        resp = s.get(tower_url, headers=HEADERS, timeout=15)
+        resp.raise_for_status()
+        html = resp.text
 
-        # Detecta se a sessão foi perdida (redirecionou para logout/login)
-        se "logout=verdadeiro" em resp.url ou "Default.aspx" em resp.url:
-            imprimir(f" ⚠️ Sessão perdida após seleção (redirecionou para {resp.url}). Pulando...")
-            retornar Nenhum
+        if "logout=true" in resp.url or "Default.aspx" in resp.url:
+            print(f"   ⚠️ Sessão perdida ao acessar torre. Pulando...")
+            return None
 
-        imprimir(f" URL final: {resp.url}")
-        ativo = FIRE_MARKER em HTML
-        imprimir(f" Torre: {'🔥 ATIVA' se ativo outro '🏰 inativa'}")
-        retornar ativo, html
+        print(f"   URL final: {resp.url}")
+        active = FIRE_MARKER in html
+        print(f"   Torre: {'🔥 ATIVA' if active else '🏰 inativa'}")
+        return active, html
 
 
 # ─── Notificações ─────────────────────────────────────────────────────────────
 
-def processo_resultado(torre_ativa, torre_html):
-    estado = carregar_estado()
-15
-, limite de tempo=
-    was_active = estado.pegar("ativo", Falso)
+def process_result(tower_active, tower_html):
+    state = load_state()
+    now   = now_brt()
+    now_s = now.isoformat()
+    was_active = state.get("active", False)
 
-    se torre_ativa e não estava_ativo:
-        estado["ativo"] = Verdadeiro
-        estado["iniciado_em"] = agora_s
+    if tower_active and not was_active:
+        state["active"]     = True
+        state["started_at"] = now_s
 
-        jogo_início = ""
-        m = re.procurar(r'começou em.*?>(\d{2}/\d{2}/\d{4},\s*\d{2}:\d{2})<', torre_html)
-        se m:
-            jogo_início = f"\n🎮 Início no jogo: <b>{meu.grupo(1)}</b>"
+        game_start = ""
+        m = re.search(r'começou em.*?>(\d{2}/\d{2}/\d{4},\s*\d{2}:\d{2})<', tower_html)
+        if m:
+            game_start = f"\n🎮 Início no jogo: <b>{m.group(1)}</b>"
 
-        máximo = ""
-        se estado.pegar("último_terminado_em") e estado.pegar("última_duração_min") é não Nenhum:
-            Último = (f"\n🕐 Última torre: {fmt(estado['último_terminado_em'])} "
-                      f"(duração: {fmt_duração(estado['última_duração_min'])})")
+        ultimo = ""
+        if state.get("last_ended_at") and state.get("last_duration_min") is not None:
+            ultimo = (f"\n🕐 Última torre: {fmt(state['last_ended_at'])} "
+                      f"(duração: {fmt_duracao(state['last_duration_min'])})")
 
-        mensagem = (
+        msg = (
             f"🔥 <b>TORRE INFERNAL EM CHAMAS!</b>\n\n"
-            f"⏰ Detectada às <b>{agora.tempo de strft('%H:%M')}</b>{jogo_início}{último}"
+            f"⏰ Detectada às <b>{now.strftime('%H:%M')}</b>{game_start}{ultimo}"
         )
-        enviar_telegrama(mensagem)
-        imprimir("📨 Notificação de INÍCIO ambiental.")
+        send_telegram(msg)
+        print("📨 Notificação de INÍCIO enviada.")
 
-    elif não torre_ativa e estava_ativo:
-        iniciado = data e hora.deisoformato(estado["iniciado_em"]) se estado.pegar("iniciado_em") outro Nenhum
-        duração_min = int((agora - começou).total_segundos() / 60) se iniciado outro Nenhum
-        estado["ativo"] = Falso
-        estado["último_terminado_em"] = agora_s
-        estado["última_duração_min"] = duração_min
+        registrar_evento("ACENDEU", {
+            "hora_deteccao": now.strftime("%H:%M"),
+            "inicio_no_jogo": m.group(1) if m else None,
+        })
 
-        início = f" (iniciou às {fmt(estado['iniciado_em'])})" se estado.pegar("iniciado_em") outro ""
-        mensagem = (
+    elif not tower_active and was_active:
+        started      = datetime.fromisoformat(state["started_at"]) if state.get("started_at") else None
+        duration_min = int((now - started).total_seconds() / 60) if started else None
+        state["active"]            = False
+        state["last_ended_at"]     = now_s
+        state["last_duration_min"] = duration_min
+
+        inicio = f" (iniciou às {fmt(state['started_at'])})" if state.get("started_at") else ""
+        msg = (
             f"✅ <b>Torre Infernal apagada!</b>\n\n"
-            f"⏱ Durou <b>{fmt_duraçao(duração_min)}</b>{iniciativa}\n"
-            f"🕐 Encerrou às <b>{agora.tempo de strft('%H:%M')}</b>"
+            f"⏱ Durou <b>{fmt_duracao(duration_min)}</b>{inicio}\n"
+            f"🕐 Encerrou às <b>{now.strftime('%H:%M')}</b>"
         )
-        enviar_telegrama(mensagem)
-        imprimir("📨 Notificação de PROCESSAMENTO ambiental.")
+        send_telegram(msg)
+        print("📨 Notificação de ENCERRAMENTO enviada.")
 
-    elif torre_ativa e estava_ativo:
-        iniciado = data e hora.deisoformato(estado["iniciado_em"]) se estado.pegar("iniciado_em") outro Nenhum
-        decorrido = int((agora - começou).total_segundos() / 60) se iniciado outro "?"
-        imprimir(f"🔥 Torre ainda ativa (há ~{fmt_duraçao(decorrido) se é instância(decorrido, int) outro decorrido}). Sem nova notificação.")
+        registrar_evento("APAGOU", {
+            "hora_encerramento": now.strftime("%H:%M"),
+            "iniciou_as": fmt(state["started_at"]) if state.get("started_at") else None,
+            "duracao": fmt_duracao(duration_min),
+        })
 
-    outro:
+    elif tower_active and was_active:
+        started = datetime.fromisoformat(state["started_at"]) if state.get("started_at") else None
+        elapsed = int((now - started).total_seconds() / 60) if started else "?"
+        print(f"🔥 Torre ainda ativa (há ~{fmt_duracao(elapsed) if isinstance(elapsed, int) else elapsed}). Sem nova notificação.")
+
+    else:
         print("🏰 Torre continua inativa. Nenhuma ação.")
 
     save_state(state)
@@ -262,13 +290,12 @@ def main():
             print(f"✅ Personagem confirmado no servidor {server}.")
             process_result(tower_active, tower_html)
             print("\n=== Verificação concluída ===")
-            return  # sucesso — encerra
+            return
 
         print(f"⚠️ Nenhum servidor respondeu na tentativa {tentativa}.")
 
     raise RuntimeError(
-        f"❌ Personagem '{POPMUNDO_CHARNAME}' não encontrado após {MAX_TENTATIVAS} tentativas. "
-        f"Verifique o Secret POPMUNDO_CHARNAME ou tente novamente mais tarde."
+        f"❌ Personagem '{POPMUNDO_CHARNAME}' não encontrado após {MAX_TENTATIVAS} tentativas."
     )
 
 
